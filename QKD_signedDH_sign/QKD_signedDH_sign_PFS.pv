@@ -1,0 +1,248 @@
+free    c: channel.
+free    c_KDi_Mi: channel.
+free    c_KDr_Mr: channel.
+free    c_Mi_Mr: channel.
+type	host.
+type	nonce.
+type	skey.
+type	pkey.
+table	keys(host,	skey,	pkey).
+table	keys_M(host, skey,	pkey).
+
+type sequence_num.
+free mi:bitstring [private].
+free mr:bitstring [private].
+
+(*	SIG	*)
+fun	sign(bitstring,	skey):	bitstring.
+fun	pk(skey):	pkey.
+reduc	forall	x:	bitstring,	k:	skey;   check(sign(x,	k),	pk(k))	=	x.
+
+(*	MAC	and	symmetric-key	encryption	*)
+type	symkey.
+fun	mac(bitstring,	symkey):	bitstring.
+reduc	forall	k:	symkey,	x:	bitstring;  checkmac(mac(x,	k),	k)	=	x.
+fun	senc(bitstring,	symkey):	bitstring.
+reduc	forall	k:	symkey,	x:	bitstring;  sdec(senc(x,	k),	k)	=	x.
+type	number.
+const	zero:	number.
+fun	s(number):	number. (*	Successor	*)
+const	null:	bitstring.
+type	exchangeType.
+
+(*	Diffie-Hellman	*)
+type	G.
+type	exponent.
+const	g:	G.
+fun	exp(G,	exponent):	G.
+equation	forall	x:	exponent,	y:	exponent;	exp(exp(g,	x),	y)	=	exp(exp(g,	y),	x).
+fun	G_to_bs(G):	bitstring.
+fun	G_to_symkey(G):	symkey.
+
+(*	PRF	*)
+fun	host_to_bs(host):	bitstring.
+fun	num_to_bs(number):	bitstring.
+fun	prf(bitstring,	bitstring):	bitstring.
+fun	prf_sk_d(bitstring,	bitstring):	bitstring.
+fun	prf_sk_ai(bitstring,	bitstring):	symkey.
+fun	prf_sk_ar(bitstring,	bitstring):	symkey.
+fun	prf_sk_ei(bitstring,	bitstring):	symkey.
+fun	prf_sk_er(bitstring,	bitstring):	symkey.
+fun	prf_sk_pi(bitstring,	bitstring):	bitstring.
+fun	prf_sk_pr(bitstring,	bitstring):	bitstring.
+
+(*	hosts	*)
+free	hostA,	hostB:	host.
+
+(*	events	*)
+event	 begin_KDi(bitstring).
+event	 begin_KDr(bitstring).
+event    begin_Mi(number).
+event    begin_Mi2(number, number, number, bitstring).
+event    begin_Mr(number).
+event    begin_Mr2(number, number, number, bitstring).
+event	 end_KDi2(number).
+event	 end_KDr2(number).
+event    end_Mi(bitstring, number, number).
+event    end_Mi2(bitstring, number, number, number, bitstring).
+event    end_Mr(bitstring, number, number).
+event    end_Mr2(bitstring, number, number, number, bitstring).
+
+(*	queries	*)
+query attacker(mi).
+query attacker(mr).
+
+let	KDi(IDi: host, IDr: host, SPIi:number, SPIr:number, SKEYSEED: bitstring)	=
+
+    new sid_: number;
+    new ei_x: exponent;
+    get	keys(=IDi,	skKDi,	pkKDi)	in
+    get	keys(=IDr,	skKDr,	pkKDr)	in
+    get keys_M(=IDi, skMi, pkMi) in
+    event	begin_KDi(SKEYSEED);
+
+    let signedDH1_i = (sid_, exp(g, ei_x), sign((IDi, IDr, sid_, exp(g, ei_x)), skKDi)) in
+    out(c_KDi_Mi, signedDH1_i);
+
+    in(c_KDi_Mi, signedDH2_i:bitstring);
+    let (sid: number, =sid_, KEi_y: G, KEi_y_auth: bitstring) = signedDH2_i in
+    
+    if (IDi, IDr, sid, sid_, KEi_y) = check(KEi_y_auth, pkMi) then
+
+        let SharedKey = G_to_symkey(exp(KEi_y, ei_x)) in
+
+        in(c_KDi_Mi, enc_sid: bitstring);
+        if (sid, sid_) = sdec(enc_sid, SharedKey) then
+
+        let send_Kshared = (IDi, IDr, SPIi, SPIr, SKEYSEED) in
+        out(c_KDi_Mi, senc(send_Kshared, SharedKey));
+
+        event end_KDi2(sid).
+
+
+let Mi(IDi: host, IDr: host) = 
+
+    new sid: number;
+    new ei_y: exponent;
+    new sid2: number;
+    new Nsi: sequence_num;
+    get keys_M(=IDi, skMi, pkMi) in
+    get keys_M(=IDr, skMr, pkMr) in
+    get keys(=IDi, skKDi, pkKDi) in
+
+    in(c_KDi_Mi, signedDH1_i:bitstring);
+    let (sid_: number, KEi_x: G, KEi_x_auth: bitstring) = signedDH1_i in
+    event begin_Mi(sid);
+
+    if (IDi, IDr, sid_, KEi_x) = check(KEi_x_auth, pkKDi) then
+
+        let signedDH2_i = (sid, sid_, exp(g, ei_y), sign((IDi, IDr, sid, sid_, exp(g, ei_y)), skMi)) in
+        out(c_KDi_Mi, signedDH2_i);
+
+            let SharedKey = G_to_symkey(exp(KEi_x, ei_y)) in
+
+            out(c_KDi_Mi, senc((sid, sid_), SharedKey));
+
+            in(c_KDi_Mi, send_Kshared: bitstring);
+            let (=IDi, =IDr, SPIi: number, SPIr: number, SKEYSEED: bitstring) = sdec(send_Kshared, SharedKey) in 
+
+            event end_Mi(SKEYSEED, SPIi, SPIr);
+
+            in(c_Mi_Mr, (sid2_: number, Nsr_: sequence_num, sid2__auth: bitstring));
+            let	SKm_ar_	=	prf_sk_ar(SKEYSEED,	(Nsr_,	SPIr,	SPIi))	in
+
+            let (=sid2_, =Nsr_, sid2__auth0: bitstring) = checkmac(sid2__auth, SKm_ar_) in
+                if (sid2_, Nsr_) = check(sid2__auth0, pkMr) then
+
+                    let	SKm_ai	=	prf_sk_ai(SKEYSEED,	(Nsi,	SPIi,	SPIr))	in
+                    let	SKm_ei	=	prf_sk_ei(SKEYSEED,	(Nsi,	SPIi,	SPIr))	in
+
+                    event begin_Mi2(SPIi, SPIr, sid2_, mi);
+                    out(c_Mi_Mr, (sid2, sid2_, SPIi, SPIr, Nsi, mac((sid2, sid2_, SPIi, SPIr, Nsi, sign((sid2, sid2_), skMi), senc(mi, SKm_ei)), SKm_ai)));
+
+                    in(c_Mi_Mr, esp_res: bitstring);
+                    let (=sid2, =SPIr, =SPIi, Nsr: sequence_num, esp_mr: bitstring) = esp_res in 
+                    let	SKm_ar	=	prf_sk_ar(SKEYSEED,	(Nsr,	SPIr,	SPIi))	in
+                    let	SKm_er	=	prf_sk_er(SKEYSEED,	(Nsr,	SPIr,	SPIi))	in
+
+                    let (=sid2, =SPIr, =SPIi, =Nsr, m_: bitstring) = checkmac(esp_mr, SKm_ar) in
+                        let z = sdec(m_, SKm_er) in
+                        event end_Mi2(SKEYSEED, SPIi, SPIr, sid2, z).
+
+
+let	KDr(IDi: host, IDr: host, SPIi:number, SPIr:number, SKEYSEED: bitstring)	=
+
+    new sidr_: number;
+    new er_x: exponent;
+    get	keys(=IDi,	skKDi,	pkKDi)	in
+    get	keys(=IDr,	skKDr,	pkKDr)	in
+    get keys_M(=IDr, skMr, pkMr) in
+    event	begin_KDr(SKEYSEED);
+
+    let signedDH1_r = (sidr_, exp(g, er_x), sign((IDi, IDr, sidr_, exp(g, er_x)), skKDr)) in
+    out(c_KDr_Mr, signedDH1_r);
+
+    in(c_KDr_Mr, signedDH2_r:bitstring);
+    let (sidr: number, =sidr_, KEr_y: G, KEr_y_auth: bitstring) = signedDH2_r in
+    
+    if (IDi, IDr, sidr, sidr_, KEr_y) = check(KEr_y_auth, pkMr) then
+
+        let SharedKeyr = G_to_symkey(exp(KEr_y, er_x)) in
+
+        in(c_KDr_Mr, enc_sidr: bitstring);
+        if (sidr, sidr_) = sdec(enc_sidr, SharedKeyr) then
+
+        let send_Kshared = (IDi, IDr, SPIi, SPIr, SKEYSEED) in
+        out(c_KDr_Mr, senc(send_Kshared, SharedKeyr));
+
+        event end_KDr2(sidr).
+
+
+let Mr(IDi: host, IDr: host) = 
+    new sidr: number;
+    new er_y: exponent;
+    new sid2_: number;
+    new Nsr: sequence_num;
+    get keys_M(=IDr, skMr, pkMr) in
+    get keys_M(=IDi, skMi, pkMi) in
+    get keys(=IDr, skKDr, pkKDr) in
+
+    in(c_KDr_Mr, signedDH1_r:bitstring);
+    let (sidr_: number, KEr_x: G, KEr_x_auth: bitstring) = signedDH1_r in
+    event begin_Mr(sidr);
+
+    if (IDi, IDr, sidr_, KEr_x) = check(KEr_x_auth, pkKDr) then
+
+        let signedDH2_r = (sidr, sidr_, exp(g, er_y), sign((IDi, IDr, sidr, sidr_, exp(g, er_y)), skMr)) in
+        out(c_KDr_Mr, signedDH2_r);
+
+            let SharedKeyr = G_to_symkey(exp(KEr_x, er_y)) in
+
+            out(c_KDr_Mr, senc((sidr, sidr_), SharedKeyr));
+
+            in(c_KDr_Mr, send_Kshared: bitstring);
+            let (=IDi, =IDr, SPIi: number, SPIr: number, SKEYSEED: bitstring) = sdec(send_Kshared, SharedKeyr) in 
+
+            event end_Mr(SKEYSEED, SPIi, SPIr);
+
+            let	SKm_ar	=	prf_sk_ar(SKEYSEED,	(Nsr,	SPIr,	SPIi))	in
+            let	SKm_er	=	prf_sk_er(SKEYSEED,	(Nsr,	SPIr,	SPIi))	in
+            out(c_Mi_Mr, (sid2_, Nsr, mac((sid2_, Nsr, sign((sid2_, Nsr), skMr)), SKm_ar)));
+
+            in(c_Mi_Mr, esp_init: bitstring);
+            let (sid2: number, =sid2_, =SPIi, =SPIr, Nsi: sequence_num, esp_mi: bitstring) = esp_init in 
+            
+            let	SKm_ai	=	prf_sk_ai(SKEYSEED,	(Nsi,	SPIi,	SPIr))	in
+            let	SKm_ei	=	prf_sk_ei(SKEYSEED,	(Nsi,	SPIi,	SPIr))	in
+
+            let (=sid2, =sid2_, =SPIi, =SPIr, =Nsi, aut:bitstring, m_: bitstring) = checkmac(esp_mi, SKm_ai) in
+                if (sid2, sid2_) = check(aut, pkMi) then
+                    let z = sdec(m_, SKm_ei) in 
+                    event end_Mr2(SKEYSEED, SPIi, SPIr, sid2_, z);
+                    
+                    event begin_Mr2(SPIi, SPIr, sid2, mr);
+                    out(c_Mi_Mr, (sid2, SPIr, SPIi, Nsr, mac((sid2, SPIr, SPIi, Nsr, senc(mr, SKm_er)), SKm_ar))).
+
+
+process
+    new	skKDA: skey; 
+    new skMA:	skey;
+    insert	keys(hostA,	skKDA,	pk(skKDA));
+    insert	keys_M(hostA,	skMA,	pk(skMA));
+    out(c,	pk(skKDA)); 
+    out(c,	pk(skMA));
+
+    new	skKDB: skey; 
+    new skMB:	skey;
+    insert	keys(hostB,	skKDB,	pk(skKDB));
+    insert	keys_M(hostB,	skMB,	pk(skMB));
+    out(c,	pk(skKDB)); 
+    out(c, pk(skMB));
+
+    new SKEYSEED: bitstring;
+    new SPIi:number; new SPIr:number;
+
+    ((!KDi(hostA, hostB, SPIi, SPIr, SKEYSEED))|(!Mi(hostA, hostB))
+    |(!KDr(hostA, hostB, SPIi, SPIr, SKEYSEED))|(!Mr(hostA, hostB))
+    |(phase 1; out(c, skKDA); out(c, skKDB); out(c, skMA); out(c, skMB))
+    )
